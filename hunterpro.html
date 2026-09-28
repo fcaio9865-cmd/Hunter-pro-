@@ -1,0 +1,1205 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HunterPro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: { extend: { fontFamily: { sans: ['Manrope', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'] } } }
+  };
+</script>
+<style>
+  :root {
+    color-scheme: dark;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: #09090b;
+  }
+  html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body { height: 100%; margin: 0; background: #09090b; color: #f4f4f5; font-family: 'Manrope', system-ui, sans-serif; }
+  #root { height: 100%; }
+  button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid #60a5fa; outline-offset: 2px;
+  }
+  select, input { color-scheme: dark; }
+  .scroll-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+  .scroll-thin::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin .8s linear infinite; }
+  @keyframes pop { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .pop { animation: pop .18s ease-out; }
+  @keyframes pulse-row { 0%,100% { opacity: .35; } 50% { opacity: .7; } }
+  .skeleton { animation: pulse-row 1.2s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .spin, .pop, .skeleton { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.umd.js"></script>
+
+<script>
+const { useState, useEffect, useMemo, useRef } = React;
+const html = htm.bind(React.createElement);
+
+/* ------------------------------------------------------------------ */
+/* Utilidades                                                          */
+/* ------------------------------------------------------------------ */
+const pad = (n) => String(n).padStart(2, '0');
+const inDays = (n, h) => {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(h)}:00`;
+};
+const dateOnly = (n) => inDays(n, 0).slice(0, 10);
+const fmtWhen = (s) => {
+  if (!s) return 'Sem data definida';
+  const d = new Date(s);
+  return d.toLocaleString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+};
+const fmtDate = (s) => { const [y, m, d] = s.split('-'); return `${d}/${m}/${y}`; };
+const money = (v) => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+const num = (v) => v.toLocaleString('pt-BR');
+const norm = (s) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+const initials = (name) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+const digits = (s) => s.replace(/\D/g, '');
+
+function fallbackCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      return navigator.clipboard.writeText(text).then(() => true).catch(() => fallbackCopy(text));
+    }
+  } catch (e) { /* segue para o fallback */ }
+  return Promise.resolve(fallbackCopy(text));
+}
+
+function seeded(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return () => {
+    h += 0x6D2B79F5;
+    let t = h;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* Gerador de leads realista                                           */
+/* ------------------------------------------------------------------ */
+const CITIES = [
+  { c: 'São Paulo, SP', d: 11 }, { c: 'Belo Horizonte, MG', d: 31 }, { c: 'Curitiba, PR', d: 41 },
+  { c: 'Goiânia, GO', d: 62 }, { c: 'Belém, PA', d: 91 }, { c: 'Recife, PE', d: 81 },
+  { c: 'Fortaleza, CE', d: 85 }, { c: 'Porto Alegre, RS', d: 51 }, { c: 'Salvador, BA', d: 71 },
+];
+const NAME_BANKS = [
+  { re: /hamburg|burger|lanche/, names: ['Hamburgueria Gourmet', 'Burger Brasa', 'Smash House', 'Black Bull Burgers', 'Fogo & Pão Burger', 'Dom Burger', 'Bendito Burger', 'Urban Grill Hamburgueria', 'Brutus Burger'] },
+  { re: /dentist|odont|dente|sorriso/, names: ['Odonto Clean', 'Sorriso Perfeito', 'Clínica Dental Prime', 'OdontoVida', 'Dr. Sorriso Odontologia', 'Dente Sadio', 'Implanta Center', 'Bem Sorrir Odontologia', 'Clínica Odonto Plus'] },
+  { re: /academia|fit|muscula|crossfit|gym/, names: ['Iron Fit Academia', 'Corpo & Movimento', 'Power Gym', 'Studio Vitalis', 'Arena Fitness', 'Forma Viva Academia', 'Alpha Training', 'Vitta Fit', 'Ritmo Academia'] },
+  { re: /barbear/, names: ['Barbearia Old School', 'Navalha de Ouro', 'Corte Nobre Barbearia', 'Barba & Estilo', 'Dom Barbeiro', 'Barbearia Vintage', 'The Gentleman Cuts', 'Casa do Barbeiro', 'Fio da Navalha'] },
+  { re: /pizz/, names: ['Pizzaria Forno Vivo', 'Nonna Rosa Pizzaria', 'Massa Fina', 'Pizza Nostra', 'Fornalha Pizzaria', 'Bella Napoli', 'Pizzaria Sabor de Roma', 'Borda Recheada', 'Forneria Central'] },
+];
+const SUFFIXES = ['Prime', 'do Centro', 'Express', 'Premium', 'Nova Era', 'Mais', 'Point', 'Master', 'Vip'];
+
+function generateLeads(query, audience) {
+  const key = norm(query) + '|' + audience;
+  const rng = seeded(key);
+  const q = norm(query);
+  const label = query.trim().charAt(0).toUpperCase() + query.trim().slice(1);
+  const bank = NAME_BANKS.find((b) => b.re.test(q));
+  let names;
+  if (bank) names = bank.names.slice();
+  else names = SUFFIXES.map((s) => `${label} ${s}`);
+  for (let i = names.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [names[i], names[j]] = [names[j], names[i]];
+  }
+  const slug = q.replace(/[^a-z0-9]+/g, '-');
+  return names.slice(0, 8).map((name, i) => {
+    const city = CITIES[Math.floor(rng() * CITIES.length)];
+    const a = String(Math.floor(rng() * 9000) + 1000);
+    const b = String(Math.floor(rng() * 9000) + 1000);
+    return { id: `${slug}-${i}`, name, phone: `(${city.d}) 9${a}-${b}`, city: city.c, segment: label };
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* Dados iniciais                                                      */
+/* ------------------------------------------------------------------ */
+const INITIAL_CRM = [
+  { id: 's1', name: 'Hamburgueria Gourmet', segment: 'Hamburgueria', phone: '(11) 98214-7730', city: 'São Paulo, SP', status: 'novos' },
+  { id: 's2', name: 'Burger Brasa', segment: 'Hamburgueria', phone: '(41) 99102-3348', city: 'Curitiba, PR', status: 'novos' },
+  { id: 's3', name: 'Odonto Clean', segment: 'Dentista', phone: '(31) 98876-2201', city: 'Belo Horizonte, MG', status: 'contato' },
+  { id: 's4', name: 'Sorriso Perfeito', segment: 'Dentista', phone: '(62) 99311-0574', city: 'Goiânia, GO', status: 'contato' },
+  { id: 's5', name: 'Iron Fit Academia', segment: 'Academia', phone: '(81) 98745-6612', city: 'Recife, PE', status: 'agendado', when: inDays(1, 10) },
+];
+const INITIAL_MEETINGS = [
+  { id: 'm-s5', crmId: 's5', name: 'Iron Fit Academia', when: inDays(1, 10) },
+  { id: 'm1', name: 'Odonto Clean', when: inDays(3, 15) },
+  { id: 'm2', name: 'Hamburgueria Gourmet', when: inDays(6, 9) },
+];
+const INITIAL_PROJECTS = [
+  { id: 'j1', name: 'Odonto Clean', segment: 'Dentista', url: 'odonto-clean.hunterpro.site', status: 'Publicado', tone: 'from-blue-600 to-blue-800' },
+  { id: 'j2', name: 'Hamburgueria Gourmet', segment: 'Hamburgueria', url: 'hamburgueria-gourmet.hunterpro.site', status: 'Rascunho', tone: 'from-zinc-600 to-zinc-800' },
+];
+const INITIAL_CHARGES = [
+  { id: 'p1', client: 'Odonto Clean', desc: 'Site institucional', amount: 890, due: dateOnly(-3), paid: false },
+  { id: 'p2', client: 'Iron Fit Academia', desc: 'Landing page de matrículas', amount: 1490, due: dateOnly(-10), paid: true },
+  { id: 'p3', client: 'Sorriso Perfeito', desc: 'Manutenção mensal', amount: 350, due: dateOnly(6), paid: false },
+];
+const COLUMNS = [
+  { id: 'novos', label: 'Novos' },
+  { id: 'contato', label: 'Em Contato' },
+  { id: 'agendado', label: 'Agendado' },
+];
+const QUICK = ['Hamburgueria', 'Dentista', 'Academia'];
+const AUDIENCES = ['Todos os públicos', 'Masculinos', 'Femininos', 'Famílias'];
+
+const I18N = {
+  pt: { dashboard: 'Dashboard', leads: 'Leads', crm: 'CRM', agendamentos: 'Agendamentos', projetos: 'Meus projetos', cobrar: 'Cobrar clientes', templates: 'Templates', soon: 'EM BREVE', create: 'Criar site', plan: 'Plano Simples', language: 'Idioma' },
+  en: { dashboard: 'Dashboard', leads: 'Leads', crm: 'CRM', agendamentos: 'Appointments', projetos: 'My projects', cobrar: 'Bill clients', templates: 'Templates', soon: 'SOON', create: 'Create site', plan: 'Simple Plan', language: 'Language' },
+  es: { dashboard: 'Panel', leads: 'Leads', crm: 'CRM', agendamentos: 'Citas', projetos: 'Mis proyectos', cobrar: 'Cobrar a clientes', templates: 'Plantillas', soon: 'PRONTO', create: 'Crear sitio', plan: 'Plan Simple', language: 'Idioma' },
+};
+
+/* ------------------------------------------------------------------ */
+/* Ícones                                                              */
+/* ------------------------------------------------------------------ */
+const ICONS = {
+  dashboard: 'M3 3h7v9H3z M14 3h7v5h-7z M14 12h7v9h-7z M3 16h7v5H3z',
+  leads: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z M21 21l-4.3-4.3',
+  crm: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2 M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M22 21v-2a4 4 0 0 0-3-3.9 M16 3.1a4 4 0 0 1 0 7.8',
+  agendamentos: 'M8 2v4 M16 2v4 M3 10h18 M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
+  projetos: 'M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z',
+  cobrar: 'M12 2v20 M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6',
+  templates: 'M3 3h18v18H3z M3 9h18 M9 21V9',
+  plus: 'M12 5v14 M5 12h14',
+  menu: 'M4 6h16 M4 12h16 M4 18h16',
+  x: 'M18 6L6 18 M6 6l12 12',
+  check: 'M20 6L9 17l-5-5',
+  right: 'M5 12h14 M12 5l7 7 M12 19l7-7',
+  left: 'M19 12H5 M12 19l-7-7',
+  phone: 'M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1 1 .4 1.9.7 2.8a2 2 0 0 1-.5 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.8.7a2 2 0 0 1 1.7 2z',
+  pin: 'M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0z M12 13a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  trash: 'M3 6h18 M8 6V4h8v2 M19 6l-1 14H6L5 6',
+  target: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M12 2v3 M12 19v3 M2 12h3 M19 12h3',
+  copy: 'M9 9h11v11H9z M5 15H4V4h11v1',
+  send: 'M22 2L11 13 M22 2l-7 20-4-9-9-4 20-7z',
+  trend: 'M3 17l6-6 4 4 8-8 M15 7h6v6',
+  spark: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z M19 16l.7 1.8 1.8.7-1.8.7L19 21l-.7-1.8-1.8-.7 1.8-.7z',
+};
+function Icon({ name, className = 'w-5 h-5' }) {
+  return html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className=${className} aria-hidden="true"><path d=${ICONS[name]} /></svg>`;
+}
+function Spinner({ className = 'w-5 h-5' }) {
+  return html`<svg viewBox="0 0 24 24" fill="none" className=${'spin ' + className} aria-hidden="true"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeOpacity="0.25" strokeWidth="4" /><path d="M22 12a10 10 0 0 0-10-10" stroke="currentColor" strokeWidth="4" strokeLinecap="round" /></svg>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Componentes básicos                                                 */
+/* ------------------------------------------------------------------ */
+function PageHeader({ title, subtitle, children }) {
+  return html`
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between mb-6">
+      <div>
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-zinc-50">${title}</h1>
+        ${subtitle && html`<p class="mt-1 text-zinc-400 max-w-2xl">${subtitle}</p>`}
+      </div>
+      ${children && html`<div class="shrink-0">${children}</div>`}
+    </div>`;
+}
+
+function EmptyState({ icon, title, text, children }) {
+  return html`
+    <div class="rounded-2xl border border-dashed border-zinc-800 bg-zinc-900/50 px-6 py-14 text-center">
+      <div class="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-800 text-zinc-400"><${Icon} name=${icon} /></div>
+      <p class="font-semibold text-zinc-100">${title}</p>
+      <p class="mt-1 text-sm text-zinc-400 max-w-md mx-auto">${text}</p>
+      ${children && html`<div class="mt-5">${children}</div>`}
+    </div>`;
+}
+
+const btnPrimary = 'inline-flex items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60';
+const btnGhost = 'inline-flex items-center justify-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2.5 font-semibold text-zinc-200 transition-colors hover:bg-zinc-800';
+const inputCls = 'w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-zinc-100 placeholder-zinc-500 focus:border-blue-600';
+
+/* ------------------------------------------------------------------ */
+/* Sidebar                                                             */
+/* ------------------------------------------------------------------ */
+const NAV = ['dashboard', 'leads', 'crm', 'agendamentos', 'projetos', 'cobrar', 'templates'];
+
+function Sidebar({ page, onNavigate, open, onClose, lang, setLang, onCreate }) {
+  const t = I18N[lang];
+  return html`
+    <${React.Fragment}>
+      ${open && html`<div class="fixed inset-0 z-30 bg-black/70 lg:hidden" onClick=${onClose} aria-hidden="true"></div>`}
+      <aside
+        class=${`fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 lg:static lg:z-auto lg:w-64 lg:translate-x-0 ${open ? 'translate-x-0' : '-translate-x-full'}`}
+        style=${{ paddingTop: 'env(safe-area-inset-top, 0px)', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+        aria-label="Menu principal">
+        <div class="flex items-center justify-between px-5 py-5">
+          <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white shadow-lg shadow-blue-600/30"><${Icon} name="target" className="w-6 h-6" /></div>
+            <span class="text-xl font-extrabold tracking-tight">HunterPro</span>
+          </div>
+          <button class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800 lg:hidden" onClick=${onClose} aria-label="Fechar menu"><${Icon} name="x" /></button>
+        </div>
+
+        <nav class="flex-1 space-y-1 overflow-y-auto px-3 scroll-thin">
+          ${NAV.map((id) => {
+            const active = page === id;
+            return html`
+              <button key=${id} onClick=${() => onNavigate(id)} aria-current=${active ? 'page' : undefined}
+                class=${`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left font-semibold transition-colors ${active ? 'bg-blue-600 text-white' : 'text-zinc-300 hover:bg-zinc-800 hover:text-white'}`}>
+                <${Icon} name=${id} />
+                <span class="flex-1">${t[id]}</span>
+                ${id === 'templates' && html`<span class="rounded-md bg-yellow-400 px-1.5 py-0.5 text-[10px] font-extrabold leading-none text-yellow-950">${t.soon}</span>`}
+              </button>`;
+          })}
+          <div class="pt-4">
+            <button onClick=${onCreate} aria-current=${page === 'assistente' ? 'page' : undefined}
+              class=${`flex w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-4 text-base font-bold text-white shadow-lg shadow-blue-600/30 transition-colors hover:bg-blue-500 ${page === 'assistente' ? 'ring-2 ring-blue-300/70' : ''}`}>
+              <${Icon} name="plus" /> ${t.create}
+            </button>
+          </div>
+        </nav>
+
+        <div class="space-y-3 border-t border-zinc-800 p-4">
+          <div>
+            <p class="mb-1.5 text-xs font-medium text-zinc-500">${t.language}</p>
+            <div class="grid grid-cols-3 gap-1 rounded-xl bg-zinc-950 p-1" role="group" aria-label=${t.language}>
+              ${['pt', 'en', 'es'].map((l) => html`
+                <button key=${l} onClick=${() => setLang(l)} aria-pressed=${lang === l}
+                  class=${`rounded-lg py-1.5 text-sm font-bold transition-colors ${lang === l ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>${l.toUpperCase()}</button>`)}
+            </div>
+          </div>
+          <div class="flex items-center justify-between rounded-xl border border-blue-600/40 bg-blue-600/10 px-3 py-2.5">
+            <span class="text-sm font-semibold text-blue-300">${t.plan}</span>
+            <span class="h-2 w-2 rounded-full bg-blue-500"></span>
+          </div>
+        </div>
+      </aside>
+    <//>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Leads                                                         */
+/* ------------------------------------------------------------------ */
+function LeadsPage({ search, setSearch, onSearch, crm, onSend, onSendAll }) {
+  const inCrm = (id) => crm.some((c) => c.leadId === id);
+  const pending = search.results.filter((r) => !inCrm(r.id)).length;
+  const onKey = (e) => { if (e.key === 'Enter') onSearch(); };
+
+  return html`
+    <div>
+      <${PageHeader} title="Encontre clientes prontos para conversar"
+        subtitle="Digite um nicho, escolha o público-alvo e receba uma lista de empresas com WhatsApp para abordar." />
+
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
+        <div class="grid gap-4 lg:grid-cols-[1fr_220px_auto] lg:items-end">
+          <div>
+            <label for="segmento" class="mb-1.5 block text-sm font-semibold text-zinc-300">Segmento, negócio ou nicho</label>
+            <div class="relative">
+              <span class="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-500"><${Icon} name="leads" /></span>
+              <input id="segmento" type="text" value=${search.query} onKeyDown=${onKey}
+                onChange=${(e) => setSearch((s) => ({ ...s, query: e.target.value, error: '' }))}
+                placeholder="Ex.: hamburgueria, dentista, academia" class=${inputCls + ' pl-11'} autoComplete="off" />
+            </div>
+          </div>
+          <div>
+            <label for="publico" class="mb-1.5 block text-sm font-semibold text-zinc-300">Público-alvo</label>
+            <select id="publico" value=${search.audience} onChange=${(e) => setSearch((s) => ({ ...s, audience: e.target.value }))} class=${inputCls}>
+              ${AUDIENCES.map((a) => html`<option key=${a} value=${a}>${a}</option>`)}
+            </select>
+          </div>
+          <button onClick=${onSearch} disabled=${search.loading} class=${btnPrimary + ' py-3 lg:px-8'}>
+            ${search.loading ? html`<${Spinner} className="w-5 h-5" /> Buscando...` : html`<${Icon} name="leads" /> Buscar Clientes`}
+          </button>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <span class="text-sm text-zinc-500">Atalhos:</span>
+          ${QUICK.map((q) => {
+            const on = norm(search.query) === norm(q);
+            return html`<button key=${q} onClick=${() => setSearch((s) => ({ ...s, query: q, error: '' }))}
+              class=${`rounded-full border px-3.5 py-1.5 text-sm font-semibold transition-colors ${on ? 'border-blue-600 bg-blue-600/20 text-blue-300' : 'border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800'}`}>${q}</button>`;
+          })}
+        </div>
+        ${search.error && html`<p class="mt-3 text-sm text-red-400" role="alert">${search.error}</p>`}
+      </div>
+
+      <div class="mt-6" aria-live="polite">
+        ${search.loading && html`
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
+            <div class="mb-5 flex items-center gap-3 text-zinc-300"><${Spinner} className="w-5 h-5 text-blue-500" /> Procurando empresas em <strong class="text-white">${search.query.trim()}</strong>...</div>
+            <div class="space-y-3">
+              ${[0, 1, 2, 3, 4].map((i) => html`<div key=${i} class="skeleton h-12 rounded-xl bg-zinc-800" style=${{ animationDelay: `${i * 120}ms` }}></div>`)}
+            </div>
+          </div>`}
+
+        ${!search.loading && search.done && html`
+          <div class="rounded-2xl border border-zinc-800 bg-zinc-900 pop">
+            <div class="flex flex-col gap-3 border-b border-zinc-800 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+              <div>
+                <p class="font-bold text-zinc-50">${search.results.length} empresas encontradas para ${search.summaryQuery}</p>
+                <p class="text-sm text-zinc-400">Público-alvo: ${search.summaryAudience.toLowerCase()}</p>
+              </div>
+              <button onClick=${onSendAll} disabled=${pending === 0} class=${btnGhost + ' py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed'}>
+                <${Icon} name="send" className="w-4 h-4" /> ${pending === 0 ? 'Todos já estão no CRM' : `Enviar todos (${pending}) para o CRM`}
+              </button>
+            </div>
+            <div class="overflow-x-auto scroll-thin">
+              <table class="w-full min-w-[720px] text-left">
+                <thead>
+                  <tr class="text-sm text-zinc-400">
+                    <th class="px-5 py-3 font-semibold">Nome da Empresa</th>
+                    <th class="px-5 py-3 font-semibold">WhatsApp</th>
+                    <th class="px-5 py-3 font-semibold">Cidade</th>
+                    <th class="px-5 py-3 text-right font-semibold">Ação</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800">
+                  ${search.results.map((r) => {
+                    const sent = inCrm(r.id);
+                    return html`
+                      <tr key=${r.id} class="hover:bg-zinc-800/40">
+                        <td class="px-5 py-3.5">
+                          <div class="flex items-center gap-3">
+                            <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-sm font-bold text-zinc-300">${initials(r.name)}</span>
+                            <span class="font-semibold text-zinc-100">${r.name}</span>
+                          </div>
+                        </td>
+                        <td class="px-5 py-3.5">
+                          <a href=${`https://wa.me/55${digits(r.phone)}`} target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 text-zinc-200 hover:text-blue-400">
+                            <${Icon} name="phone" className="w-4 h-4 text-zinc-500" /> ${r.phone}
+                          </a>
+                        </td>
+                        <td class="px-5 py-3.5 text-zinc-300"><span class="inline-flex items-center gap-2"><${Icon} name="pin" className="w-4 h-4 text-zinc-500" /> ${r.city}</span></td>
+                        <td class="px-5 py-3.5 text-right">
+                          ${sent
+                            ? html`<button disabled class="inline-flex items-center gap-2 rounded-lg bg-zinc-800 px-3.5 py-2 text-sm font-semibold text-zinc-400"><${Icon} name="check" className="w-4 h-4" /> No CRM</button>`
+                            : html`<button onClick=${() => onSend(r)} class="rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-500">Enviar para o CRM</button>`}
+                        </td>
+                      </tr>`;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>`}
+
+        ${!search.loading && !search.done && html`
+          <${EmptyState} icon="leads" title="Nenhuma busca feita ainda"
+            text="Escolha um atalho como Hamburgueria ou digite o seu próprio nicho e clique em Buscar Clientes." />`}
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: CRM (Kanban)                                                  */
+/* ------------------------------------------------------------------ */
+function KanbanCard({ c, idx, onMove, onRemove }) {
+  const prev = COLUMNS[idx - 1];
+  const next = COLUMNS[idx + 1];
+  return html`
+    <div draggable="true" onDragStart=${(e) => { e.dataTransfer.setData('text/plain', c.id); e.dataTransfer.effectAllowed = 'move'; }}
+      class="cursor-grab rounded-xl border border-zinc-800 bg-zinc-950 p-4 active:cursor-grabbing">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <p class="font-bold text-zinc-50">${c.name}</p>
+          <span class="mt-1 inline-block rounded-md bg-zinc-800 px-2 py-0.5 text-xs font-semibold text-zinc-300">${c.segment}</span>
+        </div>
+        <button onClick=${() => onRemove(c.id)} class="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-red-400" aria-label=${`Remover ${c.name}`}><${Icon} name="trash" className="w-4 h-4" /></button>
+      </div>
+      <div class="mt-3 space-y-1 text-sm text-zinc-400">
+        <a href=${`https://wa.me/55${digits(c.phone)}`} target="_blank" rel="noopener noreferrer" class="flex items-center gap-2 hover:text-blue-400"><${Icon} name="phone" className="w-4 h-4" /> ${c.phone}</a>
+        <p class="flex items-center gap-2"><${Icon} name="pin" className="w-4 h-4" /> ${c.city}</p>
+        ${c.status === 'agendado' && html`<p class="flex items-center gap-2 text-blue-300"><${Icon} name="agendamentos" className="w-4 h-4" /> ${fmtWhen(c.when)}</p>`}
+      </div>
+      <div class="mt-4 flex gap-2">
+        ${prev && html`<button onClick=${() => onMove(c.id, prev.id)} class="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800" aria-label=${`Voltar para ${prev.label}`}><${Icon} name="left" className="w-4 h-4" /></button>`}
+        ${next
+          ? html`<button onClick=${() => onMove(c.id, next.id)} class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white hover:bg-blue-500">Mover para ${next.label} <${Icon} name="right" className="w-4 h-4" /></button>`
+          : html`<div class="flex flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600/15 px-3 py-2 text-sm font-semibold text-blue-300"><${Icon} name="check" className="w-4 h-4" /> Reunião marcada</div>`}
+      </div>
+    </div>`;
+}
+
+function CrmPage({ crm, onMove, onRemove, goLeads }) {
+  const [over, setOver] = useState(null);
+  return html`
+    <div>
+      <${PageHeader} title="CRM" subtitle="Arraste os cartões entre as colunas ou use os botões para acompanhar cada negociação.">
+        <button onClick=${goLeads} class=${btnPrimary}><${Icon} name="plus" /> Buscar mais leads</button>
+      <//>
+      <div class="grid gap-4 md:grid-cols-3">
+        ${COLUMNS.map((col, idx) => {
+          const cards = crm.filter((c) => c.status === col.id);
+          return html`
+            <section key=${col.id}
+              onDragOver=${(e) => { e.preventDefault(); setOver(col.id); }}
+              onDragLeave=${() => setOver(null)}
+              onDrop=${(e) => { e.preventDefault(); setOver(null); const id = e.dataTransfer.getData('text/plain'); if (id) onMove(id, col.id); }}
+              class=${`rounded-2xl border bg-zinc-900 p-3 transition-colors ${over === col.id ? 'border-blue-600 bg-blue-600/5' : 'border-zinc-800'}`}
+              aria-label=${col.label}>
+              <header class="mb-3 flex items-center justify-between px-1">
+                <h2 class="font-bold text-zinc-100">${col.label}</h2>
+                <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm font-bold text-zinc-300">${cards.length}</span>
+              </header>
+              <div class="space-y-3">
+                ${cards.map((c) => html`<${KanbanCard} key=${c.id} c=${c} idx=${idx} onMove=${onMove} onRemove=${onRemove} />`)}
+                ${cards.length === 0 && html`<div class="rounded-xl border border-dashed border-zinc-800 px-3 py-8 text-center text-sm text-zinc-500">Solte um cartão aqui</div>`}
+              </div>
+            </section>`;
+        })}
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Dashboard                                                     */
+/* ------------------------------------------------------------------ */
+const DASH = {
+  7: { labels: ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'], values: [38, 52, 47, 61, 44, 29, 41], msgs: 214, replies: 58, meetings: 9, delta: ['+8%', '+5%', '+12%', '+3%'] },
+  30: { labels: ['1–5', '6–10', '11–15', '16–20', '21–25', '26–30'], values: [176, 203, 231, 198, 240, 192], msgs: 843, replies: 212, meetings: 37, delta: ['+14%', '+9%', '+18%', '+11%'] },
+};
+
+function Metric({ icon, label, value, delta }) {
+  return html`
+    <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+      <div class="flex items-center justify-between">
+        <span class="text-sm font-semibold text-zinc-400">${label}</span>
+        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600/15 text-blue-400"><${Icon} name=${icon} className="w-5 h-5" /></span>
+      </div>
+      <p class="mt-3 text-3xl font-extrabold tracking-tight text-zinc-50">${value}</p>
+      <p class="mt-1 flex items-center gap-1 text-sm text-blue-300"><${Icon} name="trend" className="w-4 h-4" /> ${delta} vs. período anterior</p>
+    </div>`;
+}
+
+function DashboardPage({ extracted, crm, sent }) {
+  const [range, setRange] = useState(30);
+  const [hover, setHover] = useState(null);
+  const d = DASH[range];
+  const values = d.values.map((v, i) => (i === d.values.length - 1 ? v + extracted : v));
+  const total = values.reduce((a, b) => a + b, 0);
+  const max = Math.max(...values);
+  const msgs = d.msgs + sent;
+  const rate = Math.round((d.replies / msgs) * 100);
+  const funnel = [
+    { label: 'Leads extraídos', v: total },
+    { label: 'Mensagens enviadas', v: msgs },
+    { label: 'Respostas recebidas', v: d.replies },
+    { label: 'Reuniões agendadas', v: d.meetings },
+  ];
+  const counts = COLUMNS.map((c) => ({ ...c, n: crm.filter((x) => x.status === c.id).length }));
+  const crmTotal = Math.max(1, crm.length);
+
+  return html`
+    <div>
+      <${PageHeader} title="Dashboard" subtitle="Resumo da sua prospecção ativa.">
+        <div class="inline-flex rounded-xl bg-zinc-900 p-1 border border-zinc-800" role="group" aria-label="Período">
+          ${[7, 30].map((r) => html`<button key=${r} onClick=${() => setRange(r)} aria-pressed=${range === r}
+            class=${`rounded-lg px-4 py-1.5 text-sm font-bold transition-colors ${range === r ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>${r} dias</button>`)}
+        </div>
+      <//>
+
+      <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <${Metric} icon="leads" label="Leads Extraídos" value=${num(total)} delta=${d.delta[0]} />
+        <${Metric} icon="send" label="Mensagens Enviadas" value=${num(msgs)} delta=${d.delta[1]} />
+        <${Metric} icon="crm" label="Taxa de Resposta" value=${rate + '%'} delta=${d.delta[2]} />
+        <${Metric} icon="agendamentos" label="Reuniões Agendadas" value=${num(d.meetings)} delta=${d.delta[3]} />
+      </div>
+
+      <div class="mt-4 grid gap-4 lg:grid-cols-3">
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 lg:col-span-2">
+          <div class="mb-4 flex items-baseline justify-between">
+            <h2 class="font-bold text-zinc-100">Leads extraídos por período</h2>
+            <span class="text-sm text-zinc-400">${hover !== null ? `${d.labels[hover]}: ${num(values[hover])} leads` : `Total: ${num(total)}`}</span>
+          </div>
+          <div class="flex h-52 items-end gap-2 sm:gap-3" role="img" aria-label="Gráfico de barras de leads extraídos">
+            ${values.map((v, i) => html`
+              <div key=${i} class="flex h-full flex-1 flex-col justify-end" onMouseEnter=${() => setHover(i)} onMouseLeave=${() => setHover(null)} onClick=${() => setHover(i)}>
+                <div class=${`w-full rounded-t-lg transition-all ${v === max ? 'bg-blue-500' : 'bg-blue-600/60'} ${hover === i ? 'brightness-125' : ''}`} style=${{ height: `${Math.max(6, (v / max) * 100)}%` }}></div>
+              </div>`)}
+          </div>
+          <div class="mt-2 flex gap-2 sm:gap-3">
+            ${d.labels.map((l, i) => html`<span key=${i} class="flex-1 text-center text-xs text-zinc-500">${l}</span>`)}
+          </div>
+        </div>
+
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+          <h2 class="mb-4 font-bold text-zinc-100">Funil de prospecção</h2>
+          <div class="space-y-4">
+            ${funnel.map((f) => html`
+              <div key=${f.label}>
+                <div class="mb-1 flex justify-between text-sm"><span class="text-zinc-300">${f.label}</span><span class="font-bold text-zinc-50">${num(f.v)}</span></div>
+                <div class="h-2.5 rounded-full bg-zinc-800"><div class="h-2.5 rounded-full bg-blue-600" style=${{ width: `${Math.max(3, (f.v / funnel[0].v) * 100)}%` }}></div></div>
+              </div>`)}
+          </div>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+        <div class="mb-3 flex items-baseline justify-between">
+          <h2 class="font-bold text-zinc-100">CRM agora</h2>
+          <span class="text-sm text-zinc-400">${crm.length} ${crm.length === 1 ? 'empresa' : 'empresas'} no funil</span>
+        </div>
+        <div class="flex h-3 overflow-hidden rounded-full bg-zinc-800">
+          ${counts.map((c, i) => html`<div key=${c.id} class=${['bg-blue-900', 'bg-blue-700', 'bg-blue-500'][i]} style=${{ width: `${(c.n / crmTotal) * 100}%` }}></div>`)}
+        </div>
+        <div class="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-zinc-300">
+          ${counts.map((c, i) => html`<span key=${c.id} class="inline-flex items-center gap-2"><span class=${`h-2.5 w-2.5 rounded-full ${['bg-blue-900', 'bg-blue-700', 'bg-blue-500'][i]}`}></span>${c.label}: <strong class="text-white">${c.n}</strong></span>`)}
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Agendamentos (Central de Reuniões)                            */
+/* ------------------------------------------------------------------ */
+const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function relLabel(when) {
+  const today = new Date(dateOnly(0) + 'T00:00');
+  const day = new Date(when.slice(0, 10) + 'T00:00');
+  const diff = Math.round((day - today) / 86400000);
+  if (diff === 0) return 'Hoje';
+  if (diff === 1) return 'Amanhã';
+  if (diff < 0) return 'Realizada';
+  return `Em ${diff} dias`;
+}
+
+function MeetingItem({ m, past, onCancel }) {
+  const d = new Date(m.when);
+  const dayLabel = d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
+  const timeLabel = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const rel = relLabel(m.when);
+  return html`
+    <li class=${`rounded-xl border border-zinc-800 bg-zinc-950 p-4 ${past ? 'opacity-60' : ''}`}>
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <p class="truncate font-bold text-zinc-50">${m.name}</p>
+          <p class="mt-1 text-sm capitalize text-zinc-400">${dayLabel}</p>
+          <p class="mt-0.5 flex items-center gap-2 text-sm font-semibold text-blue-300"><${Icon} name="agendamentos" className="w-4 h-4" /> ${timeLabel}</p>
+        </div>
+        <div class="flex shrink-0 flex-col items-end gap-2">
+          <span class=${`rounded-md px-2 py-0.5 text-xs font-bold ${rel === 'Hoje' ? 'bg-blue-600 text-white' : 'bg-zinc-800 text-zinc-300'}`}>${rel}</span>
+          <button onClick=${() => onCancel(m.id)} class="rounded-lg p-1.5 text-zinc-500 hover:bg-zinc-800 hover:text-red-400" aria-label=${`Cancelar reunião com ${m.name}`}><${Icon} name="trash" className="w-4 h-4" /></button>
+        </div>
+      </div>
+    </li>`;
+}
+
+function SchedulePage({ meetings, onAdd, onCancel }) {
+  const now = new Date();
+  const todayKey = dateOnly(0);
+  const [view, setView] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const [form, setForm] = useState({ name: '', when: '' });
+  const [error, setError] = useState('');
+
+  const monthLabel = new Date(view.y, view.m, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const firstWeekday = new Date(view.y, view.m, 1).getDay();
+  const daysInMonth = new Date(view.y, view.m + 1, 0).getDate();
+  const cells = [...Array(firstWeekday).fill(null), ...Array.from({ length: daysInMonth }, (_, i) => i + 1)];
+  const keyOf = (d) => `${view.y}-${pad(view.m + 1)}-${pad(d)}`;
+
+  const perDay = {};
+  meetings.forEach((m) => { const k = m.when.slice(0, 10); perDay[k] = (perDay[k] || 0) + 1; });
+
+  const nowStr = `${todayKey}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  const sorted = [...meetings].sort((a, b) => a.when.localeCompare(b.when));
+  const upcoming = sorted.filter((m) => m.when >= nowStr);
+  const past = sorted.filter((m) => m.when < nowStr).reverse();
+
+  const shift = (delta) => setView((v) => {
+    const d = new Date(v.y, v.m + delta, 1);
+    return { y: d.getFullYear(), m: d.getMonth() };
+  });
+  const pickDay = (d) => setForm((f) => ({ ...f, when: `${keyOf(d)}T${f.when ? f.when.slice(11, 16) : '09:00'}` }));
+  const submit = () => {
+    if (!form.name.trim() || !form.when) { setError('Preencha o nome do cliente e a data com horário.'); return; }
+    onAdd({ id: 'm' + Date.now(), name: form.name.trim(), when: form.when });
+    const d = new Date(form.when);
+    setView({ y: d.getFullYear(), m: d.getMonth() });
+    setForm({ name: '', when: '' });
+    setError('');
+  };
+  const selectedKey = form.when.slice(0, 10);
+
+  return html`
+    <div>
+      <${PageHeader} title="Central de Reuniões" subtitle="Marque reuniões com seus clientes e acompanhe tudo no calendário." />
+
+      <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5">
+        <div class="grid gap-3 md:grid-cols-[1fr_260px_auto] md:items-end">
+          <div>
+            <label for="ag-nome" class="mb-1.5 block text-sm font-semibold text-zinc-300">Nome do Cliente/Empresa</label>
+            <input id="ag-nome" type="text" value=${form.name} placeholder="Ex.: Odonto Clean" autoComplete="off"
+              onChange=${(e) => { setForm((f) => ({ ...f, name: e.target.value })); setError(''); }}
+              onKeyDown=${(e) => e.key === 'Enter' && submit()} class=${inputCls + ' py-2.5'} />
+          </div>
+          <div>
+            <label for="ag-data" class="mb-1.5 block text-sm font-semibold text-zinc-300">Data e Horário</label>
+            <input id="ag-data" type="datetime-local" value=${form.when}
+              onChange=${(e) => { setForm((f) => ({ ...f, when: e.target.value })); setError(''); }}
+              class=${inputCls + ' py-2.5'} />
+          </div>
+          <button onClick=${submit} class=${btnPrimary + ' py-2.5'}><${Icon} name="check" /> Confirmar Agendamento</button>
+        </div>
+        ${error && html`<p class="mt-3 text-sm text-red-400" role="alert">${error}</p>`}
+      </div>
+
+      <div class="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+        <section class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5" aria-label="Calendário mensal">
+          <div class="mb-4 flex items-center justify-between gap-2">
+            <h2 class="text-lg font-bold capitalize text-zinc-50">${monthLabel}</h2>
+            <div class="flex items-center gap-2">
+              <button onClick=${() => setView({ y: now.getFullYear(), m: now.getMonth() })} class=${btnGhost + ' px-3 py-1.5 text-sm'}>Hoje</button>
+              <button onClick=${() => shift(-1)} class="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800" aria-label="Mês anterior"><${Icon} name="left" className="w-4 h-4" /></button>
+              <button onClick=${() => shift(1)} class="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:bg-zinc-800" aria-label="Próximo mês"><${Icon} name="right" className="w-4 h-4" /></button>
+            </div>
+          </div>
+          <div class="grid grid-cols-7 gap-1.5 sm:gap-2">
+            ${WEEKDAYS.map((w) => html`<div key=${w} class="pb-1 text-center text-xs font-semibold text-zinc-500">${w}</div>`)}
+            ${cells.map((d, i) => {
+              if (d === null) return html`<div key=${'b' + i}></div>`;
+              const k = keyOf(d);
+              const isToday = k === todayKey;
+              const isSel = k === selectedKey;
+              const count = perDay[k] || 0;
+              return html`
+                <button key=${k} onClick=${() => pickDay(d)} aria-label=${`Dia ${d}${count ? `, ${count} reunião` : ''}${isToday ? ', hoje' : ''}`}
+                  class=${`relative flex aspect-square flex-col items-start justify-between rounded-lg p-1.5 text-left transition-colors sm:rounded-xl sm:p-2 ${isToday ? 'border-2 border-blue-500' : 'border border-zinc-800'} ${isSel ? 'bg-blue-600/25' : 'bg-zinc-950 hover:bg-zinc-800'}`}>
+                  <span class=${`text-sm font-bold ${isToday ? 'text-blue-300' : 'text-zinc-200'}`}>${d}</span>
+                  ${count > 0 && html`<span class="flex items-center gap-1"><span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>${count > 1 && html`<span class="text-[10px] font-bold text-blue-300">${count}</span>`}</span>`}
+                </button>`;
+            })}
+          </div>
+          <p class="mt-4 text-xs text-zinc-500">Toque em um dia para preencher a data do formulário. Os pontos azuis marcam dias com reunião.</p>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-5" aria-label="Próximas reuniões agendadas">
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-bold text-zinc-50">Próximas Reuniões Agendadas</h2>
+            <span class="rounded-full bg-zinc-800 px-2.5 py-0.5 text-sm font-bold text-zinc-300">${upcoming.length}</span>
+          </div>
+          <div class="scroll-thin lg:max-h-[620px] lg:overflow-y-auto lg:pr-1">
+            ${upcoming.length === 0 && html`<div class="rounded-xl border border-dashed border-zinc-800 px-4 py-10 text-center text-sm text-zinc-400">Nenhuma reunião marcada. Preencha o formulário acima para agendar a primeira.</div>`}
+            <ul class="space-y-3">${upcoming.map((m) => html`<${MeetingItem} key=${m.id} m=${m} past=${false} onCancel=${onCancel} />`)}</ul>
+            ${past.length > 0 && html`
+              <p class="mb-3 mt-6 text-sm font-semibold text-zinc-500">Anteriores</p>
+              <ul class="space-y-3">${past.map((m) => html`<${MeetingItem} key=${m.id} m=${m} past=${true} onCancel=${onCancel} />`)}</ul>`}
+          </div>
+        </section>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Meus projetos                                                 */
+/* ------------------------------------------------------------------ */
+function ProjectsPage({ projects, onCreate, onRemove, onCopy }) {
+  return html`
+    <div>
+      <${PageHeader} title="Meus projetos" subtitle="Sites que você criou para seus clientes.">
+        <button onClick=${onCreate} class=${btnPrimary}><${Icon} name="plus" /> Criar site</button>
+      <//>
+      ${projects.length === 0
+        ? html`<${EmptyState} icon="projetos" title="Você ainda não criou nenhum site" text="Crie um site para mostrar ao cliente como ele pode aparecer no Google.">
+            <button onClick=${onCreate} class=${btnPrimary}>Criar primeiro site</button>
+          <//>`
+        : html`<div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            ${projects.map((p) => html`
+              <div key=${p.id} class="overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900">
+                <div class=${`bg-gradient-to-br ${p.tone} p-4`}>
+                  <div class="rounded-lg bg-zinc-950/70 p-3">
+                    <div class="mb-3 flex gap-1.5"><span class="h-2 w-2 rounded-full bg-zinc-500"></span><span class="h-2 w-2 rounded-full bg-zinc-500"></span><span class="h-2 w-2 rounded-full bg-zinc-500"></span></div>
+                    <div class="h-3 w-2/3 rounded bg-zinc-300/80"></div>
+                    <div class="mt-2 h-2 w-full rounded bg-zinc-600"></div>
+                    <div class="mt-1.5 h-2 w-4/5 rounded bg-zinc-600"></div>
+                    <div class="mt-3 h-5 w-16 rounded bg-blue-500"></div>
+                  </div>
+                </div>
+                <div class="p-4">
+                  <div class="flex items-start justify-between gap-2">
+                    <div><p class="font-bold text-zinc-50">${p.name}</p><p class="text-sm text-zinc-400">${p.segment}</p></div>
+                    <span class=${`rounded-md px-2 py-0.5 text-xs font-bold ${p.status === 'Publicado' ? 'bg-blue-600/20 text-blue-300' : 'bg-zinc-800 text-zinc-300'}`}>${p.status}</span>
+                  </div>
+                  <p class="mt-2 truncate text-sm text-zinc-500">${p.url}</p>
+                  <div class="mt-4 flex gap-2">
+                    <button onClick=${() => onCopy(p)} class=${btnGhost + ' flex-1 py-2 text-sm'}><${Icon} name="copy" className="w-4 h-4" /> Copiar link</button>
+                    <button onClick=${() => onRemove(p.id)} class=${btnGhost + ' py-2 text-sm hover:text-red-400'} aria-label=${`Remover ${p.name}`}><${Icon} name="trash" className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              </div>`)}
+          </div>`}
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Cobrar clientes                                               */
+/* ------------------------------------------------------------------ */
+function ChargesPage({ charges, crm, onAdd, onPay, onCopy, onRemove }) {
+  const [form, setForm] = useState({ client: '', desc: '', amount: '', due: dateOnly(7) });
+  const today = dateOnly(0);
+  const open = charges.filter((c) => !c.paid).reduce((s, c) => s + c.amount, 0);
+  const received = charges.filter((c) => c.paid).reduce((s, c) => s + c.amount, 0);
+  const submit = () => {
+    const amount = parseFloat(String(form.amount).replace(',', '.'));
+    if (!form.client.trim() || !(amount > 0) || !form.due) return;
+    onAdd({ id: 'p' + Date.now(), client: form.client.trim(), desc: form.desc.trim() || 'Serviço prestado', amount, due: form.due, paid: false });
+    setForm({ client: '', desc: '', amount: '', due: dateOnly(7) });
+  };
+  const status = (c) => (c.paid ? { t: 'Pago', cls: 'bg-blue-600/20 text-blue-300' } : c.due < today ? { t: 'Atrasada', cls: 'bg-red-500/15 text-red-300' } : { t: 'Pendente', cls: 'bg-yellow-400/15 text-yellow-300' });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  return html`
+    <div>
+      <${PageHeader} title="Cobrar clientes" subtitle="Registre cobranças e copie a mensagem pronta para enviar no WhatsApp." />
+      <div class="grid gap-4 sm:grid-cols-2">
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5"><p class="text-sm font-semibold text-zinc-400">A receber</p><p class="mt-1 text-3xl font-extrabold">${money(open)}</p></div>
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5"><p class="text-sm font-semibold text-zinc-400">Recebido</p><p class="mt-1 text-3xl font-extrabold text-blue-400">${money(received)}</p></div>
+      </div>
+
+      <div class="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
+        <h2 class="mb-4 font-bold text-zinc-100">Nova cobrança</h2>
+        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-[1.2fr_1.2fr_140px_170px_auto] xl:items-end">
+          <div><label class="mb-1 block text-sm font-semibold text-zinc-300" for="cb-cli">Cliente</label>
+            <input id="cb-cli" list="cb-lista" value=${form.client} onChange=${set('client')} placeholder="Nome da empresa" class=${inputCls + ' py-2.5'} />
+            <datalist id="cb-lista">${crm.map((c) => html`<option key=${c.id} value=${c.name}></option>`)}</datalist></div>
+          <div><label class="mb-1 block text-sm font-semibold text-zinc-300" for="cb-desc">Descrição</label>
+            <input id="cb-desc" value=${form.desc} onChange=${set('desc')} placeholder="Ex.: site institucional" class=${inputCls + ' py-2.5'} /></div>
+          <div><label class="mb-1 block text-sm font-semibold text-zinc-300" for="cb-val">Valor (R$)</label>
+            <input id="cb-val" type="number" min="0" step="0.01" value=${form.amount} onChange=${set('amount')} placeholder="0,00" class=${inputCls + ' py-2.5'} /></div>
+          <div><label class="mb-1 block text-sm font-semibold text-zinc-300" for="cb-due">Vencimento</label>
+            <input id="cb-due" type="date" value=${form.due} onChange=${set('due')} class=${inputCls + ' py-2.5'} /></div>
+          <button onClick=${submit} class=${btnPrimary}><${Icon} name="plus" /> Cobrar</button>
+        </div>
+      </div>
+
+      <div class="mt-4 space-y-3">
+        ${charges.length === 0 && html`<${EmptyState} icon="cobrar" title="Nenhuma cobrança registrada" text="Preencha o formulário acima para criar a primeira cobrança." />`}
+        ${charges.map((c) => {
+          const st = status(c);
+          return html`
+            <div key=${c.id} class="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2"><p class="font-bold text-zinc-50">${c.client}</p><span class=${`rounded-md px-2 py-0.5 text-xs font-bold ${st.cls}`}>${st.t}</span></div>
+                <p class="text-sm text-zinc-400">${c.desc}, vence em ${fmtDate(c.due)}</p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <p class="mr-2 text-lg font-extrabold">${money(c.amount)}</p>
+                ${!c.paid && html`<button onClick=${() => onCopy(c)} class=${btnGhost + ' py-2 text-sm'}><${Icon} name="copy" className="w-4 h-4" /> Copiar mensagem</button>`}
+                ${!c.paid && html`<button onClick=${() => onPay(c.id)} class=${btnPrimary + ' py-2 text-sm'}><${Icon} name="check" className="w-4 h-4" /> Marcar como pago</button>`}
+                <button onClick=${() => onRemove(c.id)} class=${btnGhost + ' py-2 text-sm hover:text-red-400'} aria-label=${`Remover cobrança de ${c.client}`}><${Icon} name="trash" className="w-4 h-4" /></button>
+              </div>
+            </div>`;
+        })}
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tela: Assistente de IA e Automação de Abordagem                     */
+/* ------------------------------------------------------------------ */
+const TONES = ['Profissional', 'Persuasivo', 'Amigável'];
+const DEFAULT_MESSAGE = 'Olá! Tudo bem? Acredito que o nosso trabalho pode ajudar a sua empresa a conquistar mais clientes. Posso te enviar uma proposta rápida, sem compromisso?';
+
+const CATS = [
+  { re: /site|landing|web|loja virtual|e-?commerce|pagina/,
+    pain: 'muitos clientes pesquisam no Google antes de decidir onde comprar, e quem não aparece acaba perdendo a venda',
+    gain: 'um site rápido, feito para transformar visitantes em contatos no WhatsApp',
+    hooks: ['Se um cliente procurasse o seu negócio no Google agora, ele encontraria você?', 'Quantos clientes você acha que perde por não ter um site que passe confiança?'] },
+  { re: /marketing|trafego|anuncio|social media|instagram|midia|divulga|seo/,
+    pain: 'postar sem estratégia consome tempo e quase não traz cliente novo',
+    gain: 'campanhas e conteúdos pensados para atrair pessoas que realmente querem comprar',
+    hooks: ['O seu Instagram hoje traz clientes ou só curtidas?', 'Quanto você investe em divulgação sem saber exatamente o retorno?'] },
+  { re: /design|logo|identidade|marca|branding|arte/,
+    pain: 'uma marca sem identidade visual clara passa pouca confiança e é facilmente esquecida',
+    gain: 'uma identidade visual profissional, que faz o seu negócio ser reconhecido e lembrado',
+    hooks: ['Se o seu logo estivesse ao lado do de um concorrente, qual passaria mais confiança?', 'Sua marca conta hoje a história que você gostaria que ela contasse?'] },
+  { re: /contab|contador|imposto|fiscal|financ|bpo|mei/,
+    pain: 'impostos e burocracia tomam o tempo que deveria estar indo para o crescimento do negócio',
+    gain: 'uma gestão contábil e financeira organizada, que evita dor de cabeça e ajuda a pagar menos imposto dentro da lei',
+    hooks: ['Quantas horas por mês você perde com burocracia e impostos?', 'Você tem certeza de que está pagando o imposto certo hoje?'] },
+  { re: /estetic|beleza|cabel|sobrancelha|barbear|salao|unha|clinica|massagem|depila/,
+    pain: 'horários vazios na agenda e a dependência de indicação limitam o crescimento',
+    gain: 'um fluxo constante de novos clientes e uma agenda mais cheia',
+    hooks: ['Sua agenda está cheia em todos os dias da semana?', 'Quantos clientes novos chegaram até você por indicação no último mês?'] },
+  { re: /software|sistema|app|aplicativo|automac|crm|chatbot|bot|saas/,
+    pain: 'tarefas repetidas e feitas à mão consomem horas da equipe e abrem espaço para erro',
+    gain: 'automação que faz o trabalho repetitivo por você e libera o time para vender e atender melhor',
+    hooks: ['Quantas horas por semana a sua equipe gasta com tarefas que poderiam ser automáticas?', 'E se o seu atendimento respondesse sozinho, 24 horas por dia?'] },
+  { re: /consultor|mentoria|coach|curso|treinamento|aula|palestra|educa/,
+    pain: 'sem um plano claro, é fácil trabalhar muito e ver o resultado crescer pouco',
+    gain: 'um acompanhamento prático, com metas definidas e passos claros até o resultado',
+    hooks: ['O que hoje mais trava o crescimento do seu negócio?', 'Você tem um plano claro para os próximos 90 dias?'] },
+];
+const CTAS = {
+  Profissional: ['Posso te enviar uma proposta sem compromisso ainda hoje?', 'Faz sentido conversarmos por 10 minutos nesta semana?'],
+  Persuasivo: ['Posso reservar um horário para você?', 'Quer ver como isso funcionaria no seu negócio?'],
+  Amigável: ['Posso te mandar uma ideia rápida por aqui?', 'Topa bater um papo rápido?'],
+};
+
+function buildMessage(business, service, tone, variant) {
+  const biz = business.trim();
+  const svc = service.trim().replace(/[.!\s]+$/, '');
+  const found = CATS.find((c) => c.re.test(norm(svc)));
+  const cat = found || {
+    pain: 'muitas empresas perdem oportunidades por não terem uma solução simples e confiável para isso',
+    gain: 'uma solução prática, com atendimento próximo e resultado fácil de acompanhar',
+    hooks: [`Você já pensou em melhorar o seu resultado com ${svc}?`, `Como você resolve hoje tudo o que envolve ${svc}?`],
+  };
+  const hook = cat.hooks[variant % cat.hooks.length];
+  const cta = CTAS[tone][variant % CTAS[tone].length];
+
+  if (tone === 'Persuasivo') {
+    return `Olá! Uma pergunta rápida: ${hook}\n\nA verdade é que ${cat.pain}. Nossa equipe resolve isso com ${svc}: ${cat.gain}.\n\nEstou com poucas vagas na agenda deste mês e prefiro reservar uma para a sua empresa.\n\n${cta} Responda aqui e eu te envio os detalhes agora.\n\n${biz}`;
+  }
+  if (tone === 'Amigável') {
+    return `Oi, tudo bem? 😊\n\nAqui é da equipe ${biz}! Trabalho com ${svc} e acredito que a sua empresa tem tudo para se destacar ainda mais.\n\nSabe aquela situação em que ${cat.pain}? A gente ajuda com ${cat.gain}, de um jeito leve e sem complicação.\n\n${cta} Se preferir, é só me responder aqui mesmo que eu explico tudo com calma. 🚀\n\nUm abraço,\n${biz}`;
+  }
+  return `Olá, tudo bem?\n\nAqui é da equipe ${biz}. Trabalhamos com ${svc} e entrei em contato porque ${cat.pain}.\n\nNossa proposta é entregar ${cat.gain}, com atendimento próximo e prazos claros.\n\n${cta}\n\nFico à disposição.\nEquipe ${biz}`;
+}
+
+function AssistantPage({ assist, setAssist, onGenerate, crm, dispatch, onDispatch, goLeads }) {
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef(null);
+  useEffect(() => () => clearTimeout(copyTimer.current), []);
+  useEffect(() => { setCopied(false); }, [assist.stamp]);
+
+  const set = (k) => (e) => setAssist((a) => ({ ...a, [k]: e.target.value, error: '' }));
+  const doCopy = () => {
+    copyText(assist.message).then((ok) => {
+      if (!ok) { setAssist((a) => ({ ...a, error: 'Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.' })); return; }
+      setCopied(true);
+      clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const total = crm.length;
+  const pct = Math.round(dispatch.progress);
+  const sentCount = Math.min(total, Math.floor((dispatch.progress / 100) * dispatch.total));
+  const current = dispatch.running ? dispatch.names[Math.min(dispatch.names.length - 1, sentCount)] : '';
+  const shownLog = dispatch.names.slice(0, sentCount).slice(-4).reverse();
+  const usedMessage = assist.message.trim() || DEFAULT_MESSAGE;
+
+  return html`
+    <div>
+      <${PageHeader} title="Assistente de IA e Automação de Abordagem"
+        subtitle="Conte o que você vende, escolha o tom de voz e receba uma mensagem de abordagem pronta para o WhatsApp." />
+
+      <div class="grid gap-4 lg:grid-cols-2">
+        <section class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 sm:p-6" aria-label="Dados da mensagem">
+          <div class="mb-5 flex items-center gap-3">
+            <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600/15 text-blue-400"><${Icon} name="spark" /></span>
+            <h2 class="text-lg font-bold text-zinc-50">Gerador de mensagem</h2>
+          </div>
+
+          <label class="mb-1.5 block text-sm font-semibold text-zinc-300" for="ia-negocio">Nome do seu negócio</label>
+          <input id="ia-negocio" type="text" value=${assist.business} onChange=${set('business')} placeholder="Ex.: Estúdio Pixel" class=${inputCls} autoComplete="off" />
+
+          <label class="mb-1.5 mt-4 block text-sm font-semibold text-zinc-300" for="ia-servico">O que você vende / Qual seu serviço</label>
+          <input id="ia-servico" type="text" value=${assist.service} onChange=${set('service')} placeholder="Ex.: criação de sites e landing pages" class=${inputCls} autoComplete="off" />
+
+          <label class="mb-1.5 mt-4 block text-sm font-semibold text-zinc-300" for="ia-tom">Tom de voz</label>
+          <select id="ia-tom" value=${assist.tone} onChange=${set('tone')} class=${inputCls}>
+            ${TONES.map((t) => html`<option key=${t} value=${t}>${t}</option>`)}
+          </select>
+
+          ${assist.error && html`<p class="mt-3 text-sm text-red-400" role="alert">${assist.error}</p>`}
+
+          <button onClick=${onGenerate} disabled=${assist.loading} class=${btnPrimary + ' mt-6 w-full py-3.5 text-base'}>
+            ${assist.loading
+              ? html`<${Spinner} className="w-5 h-5" /> Gerando mensagem...`
+              : html`<${Icon} name="spark" /> Gerar Mensagem de Alta Conversão com IA`}
+          </button>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 sm:p-6" aria-label="Mensagem gerada" aria-live="polite">
+          <div class="mb-5 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-bold text-zinc-50">Mensagem para WhatsApp</h2>
+            ${assist.message && !assist.loading && html`<span class="rounded-md bg-blue-600/20 px-2 py-0.5 text-xs font-bold text-blue-300">Tom ${assist.usedTone.toLowerCase()}</span>`}
+          </div>
+
+          ${assist.loading && html`
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
+              <div class="mb-4 flex items-center gap-3 text-zinc-300"><${Spinner} className="w-5 h-5 text-blue-500" /> A IA está escrevendo a sua abordagem...</div>
+              <div class="space-y-2.5">
+                ${[92, 100, 78, 96, 60].map((w, i) => html`<div key=${i} class="skeleton h-3 rounded bg-zinc-800" style=${{ width: w + '%', animationDelay: `${i * 120}ms` }}></div>`)}
+              </div>
+            </div>`}
+
+          ${!assist.loading && assist.message && html`
+            <div class="pop">
+              <label class="sr-only" for="ia-resultado">Mensagem gerada</label>
+              <textarea id="ia-resultado" rows="13" value=${assist.message}
+                onChange=${(e) => setAssist((a) => ({ ...a, message: e.target.value }))}
+                class="w-full resize-y rounded-xl border border-zinc-800 bg-zinc-950 p-4 leading-relaxed text-zinc-100 focus:border-blue-600"></textarea>
+              <div class="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p class="text-sm text-zinc-500">${assist.message.length} caracteres. Você pode editar antes de copiar.</p>
+                <button onClick=${doCopy} class=${(copied ? 'inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 font-semibold text-white' : btnPrimary)}>
+                  <${Icon} name=${copied ? 'check' : 'copy'} className="w-4 h-4" /> ${copied ? 'Copiado!' : 'Copiar Texto'}
+                </button>
+              </div>
+            </div>`}
+
+          ${!assist.loading && !assist.message && html`
+            <div class="rounded-xl border border-dashed border-zinc-800 px-5 py-14 text-center">
+              <div class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-zinc-800 text-zinc-400"><${Icon} name="send" /></div>
+              <p class="font-semibold text-zinc-100">Sua mensagem aparece aqui</p>
+              <p class="mx-auto mt-1 max-w-xs text-sm text-zinc-400">Preencha os dois campos, escolha o tom e clique em gerar. Clique de novo para receber outra versão.</p>
+            </div>`}
+        </section>
+      </div>
+
+      <section class="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-5 sm:p-6" aria-label="Simulador de Disparo em Massa">
+        <div class="mb-1 flex items-center gap-3">
+          <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600/15 text-blue-400"><${Icon} name="send" /></span>
+          <h2 class="text-lg font-bold text-zinc-50">Simulador de Disparo em Massa</h2>
+        </div>
+        <p class="mb-5 mt-2 max-w-2xl text-sm text-zinc-400">Simula o envio automático da mensagem acima para todas as empresas do seu CRM. Nenhuma mensagem real é enviada.</p>
+
+        <div class="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-stretch">
+          <div class="rounded-xl border border-zinc-800 bg-zinc-950 p-4">
+            <p class="text-sm font-semibold text-zinc-300">${assist.message.trim() ? 'Mensagem que será enviada' : 'Nenhuma mensagem gerada, será usada a abordagem padrão'}</p>
+            <p class="mt-1.5 line-clamp-3 whitespace-pre-line text-sm text-zinc-400">${usedMessage}</p>
+          </div>
+          <div class="flex flex-col justify-center rounded-xl border border-zinc-800 bg-zinc-950 px-6 py-4 text-center">
+            <p class="text-3xl font-extrabold text-zinc-50">${total}</p>
+            <p class="text-sm text-zinc-400">${total === 1 ? 'lead no CRM' : 'leads no CRM'}</p>
+          </div>
+        </div>
+
+        ${total === 0
+          ? html`<div class="mt-5 rounded-xl border border-dashed border-zinc-800 px-5 py-8 text-center">
+              <p class="font-semibold text-zinc-100">Seu CRM está vazio</p>
+              <p class="mt-1 text-sm text-zinc-400">Busque clientes e envie para o CRM para poder disparar.</p>
+              <button onClick=${goLeads} class=${btnPrimary + ' mt-4'}>Buscar clientes</button>
+            </div>`
+          : html`<button onClick=${onDispatch} disabled=${dispatch.running} class=${btnPrimary + ' mt-5 w-full py-3.5 text-base sm:w-auto sm:px-8'}>
+              ${dispatch.running ? html`<${Spinner} className="w-5 h-5" /> Enviando...` : html`<${Icon} name="send" /> Disparar para os Leads do CRM`}
+            </button>`}
+
+        ${(dispatch.running || dispatch.done) && html`
+          <div class="pop mt-6">
+            <div class="mb-2 flex items-center justify-between text-sm">
+              <span class="font-semibold text-zinc-200">${dispatch.done ? `Disparo concluído: ${dispatch.total} ${dispatch.total === 1 ? 'mensagem enviada' : 'mensagens enviadas'}` : `Enviando para ${current}`}</span>
+              <span class="font-extrabold text-zinc-50">${pct}%</span>
+            </div>
+            <div class="h-4 overflow-hidden rounded-full bg-zinc-800" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow=${pct} aria-label="Progresso do disparo">
+              <div class=${`h-4 rounded-full ${dispatch.done ? 'bg-emerald-500' : 'bg-blue-600'}`} style=${{ width: pct + '%', transition: 'width 80ms linear' }}></div>
+            </div>
+            <p class="mt-2 text-sm text-zinc-400">${dispatch.done ? 'Os leads novos foram movidos para Em Contato no CRM.' : `${sentCount} de ${dispatch.total} mensagens enviadas`}</p>
+            ${shownLog.length > 0 && html`
+              <ul class="mt-3 space-y-1.5">
+                ${shownLog.map((n, i) => html`<li key=${n + i} class="flex items-center gap-2 text-sm text-zinc-300"><span class="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600/20 text-blue-300"><${Icon} name="check" className="w-3 h-3" /></span> Mensagem entregue para ${n}</li>`)}
+              </ul>`}
+          </div>`}
+      </section>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Modal: Criar site                                                   */
+/* ------------------------------------------------------------------ */
+function CreateSiteModal({ onClose, onSubmit }) {
+  const [name, setName] = useState('');
+  const [segment, setSegment] = useState('Hamburgueria');
+  const ref = useRef(null);
+  useEffect(() => { if (ref.current) ref.current.focus(); }, []);
+  const submit = () => { if (name.trim()) onSubmit(name.trim(), segment); };
+  return html`
+    <div class="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-4 sm:items-center" onClick=${onClose}>
+      <div class="pop w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6" role="dialog" aria-modal="true" aria-label="Criar site" onClick=${(e) => e.stopPropagation()}>
+        <div class="mb-4 flex items-center justify-between">
+          <h2 class="text-xl font-bold">Criar site</h2>
+          <button onClick=${onClose} class="rounded-lg p-2 text-zinc-400 hover:bg-zinc-800" aria-label="Fechar"><${Icon} name="x" /></button>
+        </div>
+        <label class="mb-1 block text-sm font-semibold text-zinc-300" for="site-nome">Nome do negócio</label>
+        <input id="site-nome" ref=${ref} value=${name} onChange=${(e) => setName(e.target.value)} onKeyDown=${(e) => e.key === 'Enter' && submit()} placeholder="Ex.: Odonto Clean" class=${inputCls} />
+        <label class="mb-1 mt-4 block text-sm font-semibold text-zinc-300" for="site-seg">Segmento</label>
+        <select id="site-seg" value=${segment} onChange=${(e) => setSegment(e.target.value)} class=${inputCls}>
+          ${['Hamburgueria', 'Dentista', 'Academia', 'Barbearia', 'Outro'].map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
+        </select>
+        <div class="mt-6 flex gap-3">
+          <button onClick=${onClose} class=${btnGhost + ' flex-1'}>Cancelar</button>
+          <button onClick=${submit} disabled=${!name.trim()} class=${btnPrimary + ' flex-1'}>Criar site</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ------------------------------------------------------------------ */
+/* App                                                                 */
+/* ------------------------------------------------------------------ */
+function App() {
+  const [page, setPage] = useState('leads');
+  const [menu, setMenu] = useState(false);
+  const [lang, setLang] = useState('pt');
+  const [crm, setCrm] = useState(INITIAL_CRM);
+  const [search, setSearch] = useState({ query: '', audience: AUDIENCES[0], loading: false, done: false, results: [], error: '', summaryQuery: '', summaryAudience: '' });
+  const [extracted, setExtracted] = useState(0);
+  const [meetings, setMeetings] = useState(INITIAL_MEETINGS);
+  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+  const [charges, setCharges] = useState(INITIAL_CHARGES);
+  const [modal, setModal] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [assist, setAssist] = useState({ business: '', service: '', tone: TONES[0], usedTone: TONES[0], loading: false, message: '', variant: 0, stamp: 0, error: '' });
+  const [dispatch, setDispatch] = useState({ running: false, done: false, progress: 0, total: 0, names: [] });
+  const [sentMsgs, setSentMsgs] = useState(0);
+  const genTimer = useRef(null);
+  const dispatchTimer = useRef(null);
+  const searchTimer = useRef(null);
+  const toastTimer = useRef(null);
+  const mainRef = useRef(null);
+
+  const notify = (msg) => {
+    setToast(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') { setMenu(false); setModal(false); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  useEffect(() => () => { clearTimeout(genTimer.current); clearInterval(dispatchTimer.current); clearTimeout(searchTimer.current); clearTimeout(toastTimer.current); }, []);
+
+  const navigate = (id) => {
+    if (id === 'templates') { notify('Templates chegam em breve.'); return; }
+    setPage(id); setMenu(false);
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  };
+
+  /* Busca de leads (2 s de carregamento) */
+  const runSearch = () => {
+    const q = search.query.trim();
+    if (!q) { setSearch((s) => ({ ...s, error: 'Digite um segmento ou escolha um atalho abaixo.' })); return; }
+    const audience = search.audience;
+    clearTimeout(searchTimer.current);
+    setSearch((s) => ({ ...s, loading: true, done: false, error: '', results: [] }));
+    searchTimer.current = setTimeout(() => {
+      const results = generateLeads(q, audience);
+      setSearch((s) => ({ ...s, loading: false, done: true, results, summaryQuery: q, summaryAudience: audience }));
+      setExtracted((n) => n + results.length);
+    }, 2000);
+  };
+
+  /* CRM */
+  const addToCrm = (lead) => {
+    setCrm((list) => list.some((c) => c.leadId === lead.id) ? list : [{ id: 'c-' + lead.id, leadId: lead.id, name: lead.name, segment: lead.segment, phone: lead.phone, city: lead.city, status: 'novos' }, ...list]);
+    notify(`${lead.name} foi enviado para o CRM`);
+  };
+  const addAllToCrm = () => {
+    const fresh = search.results.filter((r) => !crm.some((c) => c.leadId === r.id));
+    if (!fresh.length) return;
+    setCrm((list) => [...fresh.map((lead) => ({ id: 'c-' + lead.id, leadId: lead.id, name: lead.name, segment: lead.segment, phone: lead.phone, city: lead.city, status: 'novos' })), ...list]);
+    notify(`${fresh.length} empresas enviadas para o CRM`);
+  };
+  const moveCard = (id, status) => {
+    const card = crm.find((c) => c.id === id);
+    if (!card || card.status === status) return;
+    const when = card.when || inDays(1, 10);
+    setCrm((list) => list.map((c) => c.id === id ? { ...c, status, when: status === 'agendado' ? when : c.when } : c));
+    if (status === 'agendado') {
+      setMeetings((l) => l.some((m) => m.crmId === id) ? l : [...l, { id: 'm-' + id, crmId: id, name: card.name, when }]);
+    } else {
+      setMeetings((l) => l.filter((m) => m.crmId !== id));
+    }
+    const label = COLUMNS.find((c) => c.id === status).label;
+    notify(`${card.name} movido para ${label}`);
+  };
+  const removeCard = (id) => {
+    setCrm((list) => list.filter((c) => c.id !== id));
+    setMeetings((l) => l.filter((m) => m.crmId !== id));
+    notify('Empresa removida do CRM');
+  };
+
+  /* Agendamentos */
+  const addMeeting = (m) => { setMeetings((l) => [...l, m]); notify('Reunião agendada com sucesso!'); };
+  const cancelMeeting = (id) => {
+    const m = meetings.find((x) => x.id === id);
+    setMeetings((l) => l.filter((x) => x.id !== id));
+    if (m && m.crmId) setCrm((list) => list.map((c) => c.id === m.crmId ? { ...c, status: 'contato' } : c));
+    notify('Reunião cancelada');
+  };
+
+  /* Projetos */
+  const createSite = (name, segment) => {
+    const slug = norm(name).replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'meu-site';
+    const tones = ['from-blue-600 to-blue-800', 'from-blue-500 to-zinc-800', 'from-zinc-600 to-blue-900'];
+    setProjects((p) => [{ id: 'j' + Date.now(), name, segment, url: `${slug}.hunterpro.site`, status: 'Publicado', tone: tones[p.length % tones.length] }, ...p]);
+    setModal(false); setPage('projetos'); setMenu(false);
+    notify(`Site de ${name} criado`);
+  };
+  const copyProject = (p) => copyText('https://' + p.url).then((ok) => notify(ok ? 'Link copiado' : 'Não foi possível copiar o link'));
+
+  /* Cobranças */
+  const addCharge = (c) => { setCharges((l) => [c, ...l]); notify(`Cobrança de ${money(c.amount)} criada para ${c.client}`); };
+  const payCharge = (id) => { setCharges((l) => l.map((c) => c.id === id ? { ...c, paid: true } : c)); notify('Cobrança marcada como paga'); };
+  const removeCharge = (id) => { setCharges((l) => l.filter((c) => c.id !== id)); notify('Cobrança removida'); };
+  const copyCharge = (c) => {
+    const msg = `Olá, ${c.client}! Passando para lembrar do pagamento de ${money(c.amount)} (${c.desc}), com vencimento em ${fmtDate(c.due)}. Qualquer dúvida, é só me chamar.`;
+    copyText(msg).then((ok) => notify(ok ? 'Mensagem copiada' : 'Não foi possível copiar a mensagem'));
+  };
+
+  let content;
+  if (page === 'assistente') content = html`<${AssistantPage} assist=${assist} setAssist=${setAssist} onGenerate=${generateMessage} crm=${crm} dispatch=${dispatch} onDispatch=${runDispatch} goLeads=${() => navigate('leads')} />`;
+  else if (page === 'dashboard') content = html`<${DashboardPage} extracted=${extracted} crm=${crm} sent=${sentMsgs} />`;
+  else if (page === 'crm') content = html`<${CrmPage} crm=${crm} onMove=${moveCard} onRemove=${removeCard} goLeads=${() => navigate('leads')} />`;
+  else if (page === 'agendamentos') content = html`<${SchedulePage} meetings=${meetings} onAdd=${addMeeting} onCancel=${cancelMeeting} />`;
+  else if (page === 'projetos') content = html`<${ProjectsPage} projects=${projects} onCreate=${() => setModal(true)} onRemove=${(id) => { setProjects((p) => p.filter((x) => x.id !== id)); notify('Projeto removido'); }} onCopy=${copyProject} />`;
+  else if (page === 'cobrar') content = html`<${ChargesPage} charges=${charges} crm=${crm} onAdd=${addCharge} onPay=${payCharge} onCopy=${copyCharge} onRemove=${removeCharge} />`;
+  else content = html`<${LeadsPage} search=${search} setSearch=${setSearch} onSearch=${runSearch} crm=${crm} onSend=${addToCrm} onSendAll=${addAllToCrm} />`;
+
+  return html`
+    <div class="flex h-full bg-zinc-950 text-zinc-100">
+      <${Sidebar} page=${page} onNavigate=${navigate} open=${menu} onClose=${() => setMenu(false)} lang=${lang} setLang=${setLang} onCreate=${() => navigate('assistente')} />
+
+      <div class="flex min-w-0 flex-1 flex-col">
+        <header class="flex items-center gap-3 border-b border-zinc-800 bg-zinc-900 px-4 py-3 lg:hidden">
+          <button onClick=${() => setMenu(true)} class="rounded-lg p-2 text-zinc-200 hover:bg-zinc-800" aria-label="Abrir menu"><${Icon} name="menu" /></button>
+          <div class="flex items-center gap-2">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600"><${Icon} name="target" className="w-5 h-5" /></div>
+            <span class="text-lg font-extrabold tracking-tight">HunterPro</span>
+          </div>
+        </header>
+        <main ref=${mainRef} class="flex-1 overflow-y-auto scroll-thin">
+          <div class="mx-auto w-full max-w-6xl px-4 py-6 sm:px-8 sm:py-8">${content}</div>
+        </main>
+      </div>
+
+      ${modal && html`<${CreateSiteModal} onClose=${() => setModal(false)} onSubmit=${createSite} />`}
+      ${toast && html`
+        <div class="pop fixed bottom-4 left-4 right-4 z-[60] mx-auto flex max-w-sm items-center gap-3 rounded-xl border border-zinc-700 bg-zinc-800 px-4 py-3 shadow-2xl sm:left-auto sm:right-6" role="status">
+          <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-600 text-white"><${Icon} name="check" className="w-4 h-4" /></span>
+          <span class="text-sm font-semibold">${toast}</span>
+        </div>`}
+    </div>`;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(html`<${App} />`);
+</script>
+</body>
+</html>
